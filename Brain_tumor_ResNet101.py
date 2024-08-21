@@ -3,14 +3,14 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc, \
-    classification_report
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc, classification_report
 import seaborn as sns
 from sklearn.utils import shuffle
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.callbacks import TensorBoard, ModelCheckpoint, ReduceLROnPlateau
+from tensorflow.keras.applications import ResNet101
 import tensorflow as tf
 
 # Free up memory at the start
@@ -18,10 +18,9 @@ tf.keras.backend.clear_session()
 
 # Define labels and directories
 labels = ['glioma_tumor', 'no_tumor', 'meningioma_tumor', 'pituitary_tumor']
-train_dir = '/kaggle/input/brain-tumor-classification-mri/Training'
-test_dir = '/kaggle/input/brain-tumor-classification-mri/Testing'
-image_size = 224  # Adjusted to 224 for EfficientNetB0
-
+train_dir = 'C:/Users/nthoa/PycharmProjects/Brain Tumor Project/Training'
+test_dir = 'C:/Users/nthoa/PycharmProjects/Brain Tumor Project/Testing'
+image_size = 224  # Adjusted to 224 for ResNet101
 
 # Load images from directories
 def load_images(data_dir, labels, image_size):
@@ -35,7 +34,6 @@ def load_images(data_dir, labels, image_size):
             y.append(label)
     return np.array(X), np.array(y)
 
-
 # Load and plot data distributions
 X1, y1 = load_images(train_dir, labels, image_size)
 X2, y2 = load_images(test_dir, labels, image_size)
@@ -46,8 +44,7 @@ X, y = shuffle(X, y, random_state=42)
 
 # Split data into training, validation, and test sets
 X_train_val, X_test, y_train_val, y_test = train_test_split(X, y, test_size=0.1, stratify=y, random_state=42)
-X_train, X_val, y_train, y_val = train_test_split(X_train_val, y_train_val, test_size=1 / 9, stratify=y_train_val,
-                                                  random_state=42)
+X_train, X_val, y_train, y_val = train_test_split(X_train_val, y_train_val, test_size=1/9, stratify=y_train_val, random_state=42)
 
 # Normalize images
 X_train_normalized = X_train.astype('float32') / 255
@@ -70,16 +67,14 @@ y_val_cat = tf.keras.utils.to_categorical(y_val_encoded, len(labels))
 y_test_cat = tf.keras.utils.to_categorical(y_test_encoded, len(labels))
 
 # Load the ResNet101 model pretrained on ImageNet without the top layers
-resnet = tf.keras.applications.ResNet101(weights='imagenet', include_top=False,
-                                         input_shape=(image_size, image_size, 3))
+resnet = ResNet101(weights='imagenet', include_top=False, input_shape=(image_size, image_size, 3))
 
 # Build the custom model on top of the ResNet101 base
-
-model = resnet.output
-model = tf.keras.layers.GlobalAveragePooling2D()(model)
-model = tf.keras.layers.Dropout(rate=0.5)(model)
-model = tf.keras.layers.Dense(4, activation='softmax')(model)
-model = tf.keras.models.Model(inputs=resnet.input, outputs=model)
+x = resnet.output
+x = tf.keras.layers.GlobalAveragePooling2D()(x)
+x = tf.keras.layers.Dropout(rate=0.5)(x)
+output = tf.keras.layers.Dense(len(labels), activation='softmax')(x)
+model = tf.keras.models.Model(inputs=resnet.input, outputs=output)
 
 # Compile the model
 model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
@@ -87,13 +82,13 @@ model.summary()
 
 # Set up callbacks
 tensorboard = TensorBoard(log_dir='logs')
-checkpoint = ModelCheckpoint("effnet.keras", monitor="val_accuracy", save_best_only=True, mode="auto", verbose=1)
+checkpoint = ModelCheckpoint("resnet101_model.keras", monitor="val_accuracy", save_best_only=True, mode="auto", verbose=1)
 reduce_lr = ReduceLROnPlateau(monitor='val_accuracy', factor=0.3, patience=2, min_delta=0.001, mode='auto', verbose=1)
 
 # Train the model
 history = model.fit(
     datagen.flow(X_train_normalized, y_train_cat, batch_size=32),
-    epochs=12,
+    epochs=15,
     validation_data=(X_val_normalized, y_val_cat),
     callbacks=[tensorboard, checkpoint, reduce_lr],
     verbose=1
@@ -102,7 +97,6 @@ history = model.fit(
 # Evaluate the model on the test set
 test_loss, test_accuracy = model.evaluate(X_test_normalized, y_test_cat, verbose=0)
 print(f"Test accuracy: {test_accuracy:.4f}")
-
 
 # Plot accuracy and loss
 def plot_metrics(history):
@@ -128,7 +122,6 @@ def plot_metrics(history):
 
     plt.tight_layout()
     plt.show()
-
 
 # Call the function to plot the metrics
 plot_metrics(history)
@@ -157,7 +150,6 @@ f1 = f1_score(y_test_encoded, y_test_pred_classes, average='weighted')
 # Print classification report
 print(classification_report(y_test_encoded, y_test_pred_classes, target_names=labels))
 
-
 # Calculate specificity for each class
 def calculate_specificity(conf_matrix):
     specificity_per_class = []
@@ -168,12 +160,11 @@ def calculate_specificity(conf_matrix):
         specificity_per_class.append(specificity)
     return specificity_per_class
 
-
 specificity_per_class = calculate_specificity(conf_matrix)
 for i, label in enumerate(labels):
     print(f"Specificity for {label}: {specificity_per_class[i]:.4f}")
 
-# Calculate sensitivity for each class
+# Calculate sensitivity (recall) for each class
 sensitivity_per_class = recall_score(y_test_encoded, y_test_pred_classes, average=None)
 for i, label in enumerate(labels):
     print(f"Sensitivity (Recall) for {label}: {sensitivity_per_class[i]:.4f}")
@@ -199,7 +190,7 @@ plt.title('Receiver Operating Characteristic (ROC) Curves')
 plt.legend(loc="lower right")
 plt.show()
 
-# Print metrics
+# Print weighted metrics
 print(f"Accuracy: {accuracy:.4f}")
 print(f"Precision (weighted): {precision:.4f}")
 print(f"Sensitivity (Recall, weighted): {recall:.4f}")
@@ -208,3 +199,7 @@ print(f"F1 Score (weighted): {f1:.4f}")
 # Print AUC for each class
 for i, label in enumerate(labels):
     print(f"AUC-ROC for {label}: {roc_auc[i]:.4f}")
+
+# Calculate and print average AUC-ROC
+average_auc = np.mean(list(roc_auc.values()))
+print(f"Average AUC-ROC: {average_auc:.4f}")
